@@ -12,7 +12,8 @@ class IHDR:
         self.filter_method = chunk_data[11]
         self.interlace_method = chunk_data[12]
         self.depth_max = int(2 ** self.bit_depth)
-        print("IHDR: ", self.__str__())
+        self.pixel_info = self.get_pixel_info()
+        print(self.__str__())
 
     def __str__(self):
         return str({
@@ -27,22 +28,23 @@ class IHDR:
         })
 
     def get_pixel_info(self):
+        sample_bytes = int(self.bit_depth / 8)
         if self.color_type == 0:
-            pass
+            return {
+                'fields': [{'name': 'gray', 'length': sample_bytes}],
+                'total_bytes': sample_bytes
+            }
         elif self.color_type == 2:
-            sample_bytes = int(self.bit_depth / 8)
             return {
                 'fields': [{'name': 'red', 'length': sample_bytes}, {'name': 'green', 'length': sample_bytes},
                            {'name': 'blue', 'length': sample_bytes}], 'total_bytes': sample_bytes * 3}
         elif self.color_type == 4:
-            sample_bytes = int(self.bit_depth / 8)
             return {'fields': [{'name': 'gray', 'length': sample_bytes}, {'name': 'alpha', 'length': sample_bytes}],
                     'total_bytes': sample_bytes * 2}
         elif self.color_type == 6:
-            sample_bytes = int(self.bit_depth / 8)
             return {
                 'fields': [{'name': 'red', 'length': sample_bytes}, {'name': 'green', 'length': sample_bytes},
                            {'name': 'blue', 'length': sample_bytes},
                            {'name': 'alpha', 'length': sample_bytes}, ], 'total_bytes': sample_bytes * 4}
         else:
-            pass
+            raise RuntimeError(f"undefined color type {self.color_type} as IHDR chunk")

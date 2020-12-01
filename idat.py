@@ -40,49 +40,20 @@ class IDAT:
         return ret
 
     # filter methods
-    def filter_sub(self, sample_row):
-        ret = []
-        for i, pixel in enumerate(sample_row):
-            if i == 0:
-                ret.append(pixel)
-            else:
-                new_pixel = self.add_pixels([pixel, ret[i - 1]])
-                ret.append(new_pixel)
-        return ret
+    def filter_none(self, sample, **_kwargs):
+        return sample
 
-    def filter_up(self, sample_row, prior):
-        ret = []
-        for pixel, prior_pixel in zip(sample_row, prior):
-            ret.append(self.add_pixels([ret, prior_pixel]))
-        return ret
+    def filter_sub(self, sample, prev, **_kwargs):
+        return sample + prev
 
-    def filter_average(self, sample_row, prior):
-        ret = []
-        for i, (pixel, prior_pixel) in enumerate(zip(sample_row, prior)):
-            if i == 0:
-                ret.append(self.add_pixels([self.average_pixels([prior_pixel, self.dummy_pixel]), pixel]))
-            else:
-                ret.append(self.add_pixels([self.average_pixels([prior_pixel, ret[i - 1]]), pixel]))
-        return ret
+    def filter_up(self, sample, prior, **_kwargs):
+        return sample + prior
 
-    def reverse_paeth_pixel(self, col, pixel, prev, prior):
-        ret = pixel
-        for k, v in pixel.items():
-            if col == 0:
-                pixel[k] = (v + IDAT.paeth_predictor(left=0, above=prior[col][k], upper_left=0)) % self.ihdr.depth_max
-            else:
-                pixel[k] = (v + IDAT.paeth_predictor(left=prev[k], above=prior[col][k],
-                                                     upper_left=prior[col - 1][k])) % self.ihdr.depth_max
-        return ret
+    def filter_average(self, sample, prev, prior, **_kwargs):
+        return sample + math.floor((prev + prior) / 2)
 
-    def filter_paeth(self, row_pixels, prior):
-        ret_row = []
-        for col, pixel in enumerate(row_pixels):
-            if col == 0:
-                ret_row.append(self.reverse_paeth_pixel(col, pixel, prev=self.dummy_row, prior=prior))
-            else:
-                ret_row.append(self.reverse_paeth_pixel(col, pixel, prev=ret_row[col - 1], prior=prior))
-        return ret_row
+    def filter_paeth(self, sample, prev, prior, prior_prev):
+        return sample + IDAT.paeth_predictor(left=prev, above=prior, upper_left=prior_prev)
 
     @staticmethod
     def paeth_predictor(left, above, upper_left):
@@ -97,32 +68,41 @@ class IDAT:
         else:
             return upper_left
 
+    def apply_filter_to_pixel(self, filter, param_pixels):
+        ret = {}
+        pixel_fields = self.ihdr.pixel_info['fields']
+        for field in pixel_fields:
+            field_name = field['name']
+            params = {kw: param_pixel[field_name]
+                      for kw, param_pixel in param_pixels.items()}
+            ret[field_name] = filter(**params) % self.ihdr.depth_max
+        return ret
+
+    def apply_filter_to_row(self, filter_func, sample_row, prior_row):
+        ret = []
+        for col, pixel in enumerate(sample_row):
+            if col == 0:
+                raw_row = self.apply_filter_to_pixel(filter_func,
+                                                     {'sample': pixel, 'prev': self.dummy_pixel,
+                                                      'prior': prior_row[col], 'prior_prev': self.dummy_pixel})
+            else:
+                raw_row = (self.apply_filter_to_pixel(filter_func,
+                                                      {'sample': pixel, 'prev': ret[col - 1],
+                                                       'prior': prior_row[col], 'prior_prev': prior_row[col - 1]}))
+            ret.append(raw_row)
+        return ret
+
     def apply_layout_filter(self, layout_data):
         ret = []
         for i, scanline in enumerate(layout_data):
             sample_row = scanline['pixels']
             filter_type = scanline['filter_type']
-            if filter_type == 0:
-                raw_row = sample_row
-            elif filter_type == 1:
-                raw_row = self.filter_sub(sample_row)
-            elif filter_type == 2:
-                if i == 0:
-                    raw_row = self.filter_up(sample_row, prior=self.dummy_row)
-                else:
-                    raw_row = self.filter_up(sample_row, prior=ret[i - 1])
-            elif filter_type == 3:
-                if i == 0:
-                    raw_row = self.filter_average(sample_row, prior=self.dummy_row)
-                else:
-                    raw_row = self.filter_average(sample_row, prior=ret[i - 1])
-            elif filter_type == 4:
-                if i == 0:
-                    raw_row = self.filter_paeth(sample_row, prior=self.dummy_row)
-                else:
-                    raw_row = self.filter_paeth(sample_row, prior=ret[i - 1])
+            filter_func = {0: self.filter_none, 1: self.filter_sub, 2: self.filter_up, 3: self.filter_average,
+                           4: self.filter_paeth}
+            if i == 0:
+                raw_row = self.apply_filter_to_row(filter_func[filter_type], sample_row, prior_row=self.dummy_row)
             else:
-                raise RuntimeError(f"Undefined filter type {filter_type} in IDAT chunk")
+                raw_row = self.apply_filter_to_row(filter_func[filter_type], sample_row, prior_row=ret[i - 1])
             ret.append(raw_row)
         return ret
 
@@ -134,10 +114,9 @@ class IDAT:
                 ret[k] = (ret[k] + v) % self.ihdr.depth_max
         return ret
 
-    @staticmethod
-    def average_pixels(pixel_list):
+    def average_pixels(self, pixel_list):
         n = len(pixel_list)
-        total = IDAT.add_pixels(pixel_list)
+        total = self.add_pixels(pixel_list)
         ret = {}
         for k, v in total.items():
             ret[k] = v / n
@@ -148,5 +127,5 @@ class IDAT:
         decompressed_data = zlib.decompress(self.chunk_data)
         layout = self.read_image_layout(decompressed_data, pixel_info)
         pixels_matrix = self.apply_layout_filter(layout)
-        print(pixels_matrix[3][:20])
+        print(pixels_matrix[0])
         return pixels_matrix
